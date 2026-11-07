@@ -62,7 +62,7 @@ As of 2026-11-06 the source for this firmware build hasn't been published, so `m
 | File | Where it lives | What it is |
 |---|---|---|
 | `apps/hello_i_am_mod.py` | badge + PC | New app, **Hello I Am Mod**, that shows your nametag full screen. |
-| `data/graphics/Hello_I_Am_Mod.png` | badge + PC | Your nametag as a 960×672 white/black/red palette PNG (4.7 KB): name and QR code in red, moved apart to leave the middle free for the penguin. |
+| `data/graphics/Hello_I_Am_Mod.png` | badge + PC | Your nametag as a 960×672 white/black/red palette PNG (4.7 KB): name and QR code in black, moved apart to leave the middle free for the penguin. |
 | `data/graphics/Hello_I_Am_Mod.svg` | PC only | Inkscape source for the PNG. The badge can't use SVG files. |
 | `lib/epd_fast.py` | badge + PC | Fast, partial e-paper refreshes (see below). |
 | `apps/penguin_nametag.py` | badge + PC | New app, **Penguin Nametag**: your nametag with the EST penguin waddling next to your name. |
@@ -76,8 +76,9 @@ In Penguin Nametag, User A pauses and resumes, and User B runs a normal refresh 
 |---|---|---|
 | `FAST_MODE` | `"delta"` | `"delta"`: change-only table, one pass per move. `"hold"`: the official table, `FAST_PULLS` passes. |
 | `DELTA_FRAMES` | 20 | Frames of drive per move in delta mode (about 15 ms each with window writes). 20 is the shortest table; raise it if the penguin comes out grey or leaves a trail. |
-| `WHITE_PUSH`, `BLACK_PUSH` | 6, 0 | Delta mode: frames (of 20 per pass) in which pixels that keep their colour are pushed towards it. Red pixels on the scanned lines (your name and the QR code) go out as "hold" (`hold=` the red framebuffer), which shares the stays-black table, so `BLACK_PUSH` stays 0 while there is red there; a black push would drive the red towards black. |
-| `WINDOW_WRITES` | `True` | Delta mode: the controller scans only the strip's lines (224–555), so the red bands are never driven. The first move of a session writes those lines across the whole width; after that only the penguin's columns are sent. |
+| `WHITE_PUSH` | 6 | Delta mode: frames (of 20 per pass) of push towards white for pixels that stay white, so the background stays clean and old poses fade out. Pixels that stay black (your name, the QR code, the penguin's body) are sent as white→black, so they get a full drive to black on every pass and do not fade. |
+| `RED_PUSH` | 20 | Delta mode: frames of the reduced positive rail (VDHR) for red pixels on the scanned lines, which go out as "hold" (`hold=` the red framebuffer). It keeps red there from fading; with the black design there is no red on those lines, so it does nothing. |
+| `WINDOW_WRITES` | `True` | Delta mode: the controller scans only the strip's lines (224–555), so the red bands are never driven, and only those lines are sent on each move, across the full width (80 KB). |
 | `FAST_PULLS` | 2 | Hold mode only: refresh passes per move. |
 | `REFRESH_ROWS` | `"frame"` | Hold mode only: which lines the controller scans. |
 | `PAUSE_MS` | 0 | Extra rest between moves. |
@@ -93,7 +94,7 @@ A normal refresh runs the panel's own waveform and takes about 40 s. [lib/epd_fa
 - It keeps the controller up between frames (at most 20 frames, closed after 10 s idle and before any normal update).
 - **Partial refresh:** each pixel's two bits pick a waveform table, and in this waveform the "both bits set" table never applies a voltage. Pixels outside the window are sent that way, so only the window changes. The red bands, your name and the QR code are never driven.
 
-- **Change-only mode** (after phthallo/supercon's delta refresh): `refresh(window, old=previous_framebuffer, lut=delta_lut(n))`. The red plane carries the previous frame, so each pixel picks its table as (old, new): stays white, white→black, black→white, stays black. `delta_lut(n)` drives only the two changing tables, for all n frames, so one pass does a move. Pixels that keep their colour would sit at ground, which slowly lets black relax to grey, so `delta_lut(n, white_push, black_push)` gives them a short push towards their own colour on every pass (as phthallo does). With `window_writes` and `scan_rows`, the controller scans and is written only on those lines: their full width on a session's first frame, the window's columns after that.
+- **Change-only mode** (after phthallo/supercon's delta refresh): `refresh(window, old=previous_framebuffer, lut=delta_lut(n))`. The red plane carries the previous frame, so each pixel picks its table as (old, new): stays white, white→black, black→white, stays black. `delta_lut(n)` drives only the two changing tables, for all n frames, so one pass does a move. Pixels that keep their colour would sit at ground, which slowly lets black and red relax and fade, so the penguin app sends pixels that stay black as white→black (their old bit cleared), gives pixels that stay white a short push (`delta_lut(n, white_push)`, as phthallo does), and holds red on the scanned lines with `hold=` and `delta_lut(..., hold_push=n)` (the reduced positive rail, VDHR). With `window_writes` and `scan_rows`, the controller scans and is written only on those lines, across their full width. Narrowing the data window in x as well does not work on this panel: the controller keeps writing full 60-byte rows, so the window's data wraps across them and shows up as several squashed copies.
 - **Speed:** the plane data goes over the hardware SPI bus at 20 MHz, a session starts with Pervasive Displays' short waits for this controller family (0.26 s instead of 2.8 s), and `refresh_rows=(first, last)` narrows the refresh window (register `0x90`).
 
 How the timing works, measured on this badge (`tools/epd_fast_timing.py`, `tools/epd_fast_bench.py` and the penguin):
@@ -102,7 +103,7 @@ How the timing works, measured on this badge (`tools/epd_fast_timing.py`, `tools
 |---|---|
 | One pass | the table's frame count × the frame time. The official table is 40 frames, of which only 20 drive; the shortest possible table is 20 frames (10 groups of at least 2). |
 | Frame time | about 43 µs per display line scanned: 29 ms for the whole panel, 24 ms down to line 555. Narrowing the refresh window (`0x90`) only moves the end of the scan; narrowing the data window (`0x13`, which window writes do) also moves the start, so the penguin's strip (332 lines) scans at about 15 ms a frame. The oscillator register (`0x03`) makes no difference. |
-| Penguin move, delta mode, 20 frames, window writes | about 0.35 s (0.3 s pass, 15 ms of image data) |
+| Penguin move, delta mode, 20 frames, window writes | about 0.4 s (0.3 s pass, 70 ms of image data) |
 | Penguin move, hold mode, 2 passes | about 1.8 s |
 | Session start | 0.26 s with the short waits |
 | Normal refresh | about 40 s |

@@ -195,9 +195,11 @@ class PenguinNametagApp(BaseApp):
             display.clear()
             display.draw_png(_NAMETAG)
             self._show(0)
-            # What the panel will show: the change-only planes need it outside the
-            # penguin too, so your name and the QR code get "stays" codes.
-            self.old[:] = display._framebuffer_black
+            # The "old" plane is the previous frame with pixels that stay black
+            # cleared (see _load). Outside the penguin nothing changes, so it is
+            # all clear: black there (your name, the QR code) goes out as
+            # white-to-black and gets a full drive to black on every pass.
+            self.old[:] = bytes(len(self.old))
             self._normal_refresh()
             leds.fill((0, 1, 0))
             return
